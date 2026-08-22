@@ -1,6 +1,7 @@
 from enum import Enum
 
 class ResponseSignal(Enum):
+    """Provide stable response messages for upload and processing outcomes."""
     FILE_VALIDATED_SUCESS = "file_validated_successfully"
     FILE_TYPE_NOT_SUPPORTED ="file_type_not_supported"
     FILE_SIZE_EXCEEDED = "file_size_exceeded"

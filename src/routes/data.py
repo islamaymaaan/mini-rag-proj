@@ -26,6 +26,19 @@ data_router = APIRouter(
 @data_router.post("/upload/{project_id}")
 async def upload_data(request: Request, project_id: str, file: UploadFile
                             , app_settings: Settings = Depends(get_settings)):
+    """Validate, save, and register a source file for later RAG processing.
+
+    Args:
+        request (Request): FastAPI request providing the shared MongoDB handle.
+        project_id (str): User-facing project identifier that owns the file.
+        file (UploadFile): Source document uploaded by the client.
+        app_settings (Settings): Upload limits and streaming chunk-size settings.
+
+    Returns:
+        JSONResponse: Upload signal and asset ID on success, or a 400 response
+        when validation or disk storage fails. The saved asset can later be
+        loaded and split into retrieval chunks.
+    """
 
     project_model = await ProjectModel.create_instance(
          db_client=request.app.db_client
@@ -52,6 +65,7 @@ async def upload_data(request: Request, project_id: str, file: UploadFile
 
 
     try:
+        # Stream to disk in small pieces so large allowed files are not all in memory.
         async with aiofiles.open(file_path,"wb") as f:
             while chunk := await file.read(app_settings.FILE_DEFAULT_CHUNK_SIZE):
                     await f.write(chunk)
@@ -64,7 +78,7 @@ async def upload_data(request: Request, project_id: str, file: UploadFile
               }
          )
 
-    #store the assets into the database
+    # Store file metadata so the processor can map chunks back to their source.
     asset_model= await AssetModel.create_instance(
          db_client= request.app.db_client
     )
@@ -90,6 +104,18 @@ async def upload_data(request: Request, project_id: str, file: UploadFile
 
 @data_router.post("/process/{project_id}")
 async def process_endpoint(request: Request,project_id: str, process_request: ProcessRequest):
+     """Convert one or more project files into database-backed RAG chunks.
+
+     Args:
+         request (Request): FastAPI request that supplies the MongoDB handle.
+         project_id (str): User-facing identifier of the project to process.
+         process_request (ProcessRequest): Optional file filter, split settings,
+             and reset flag.
+
+     Returns:
+         JSONResponse: Processing signal plus counts of created chunks and files,
+         or a 400 response if the requested sources cannot be processed.
+     """
 
      chunk_size = process_request.chunk_size
      overlap_size = process_request.overlap_size
@@ -159,6 +185,7 @@ async def process_endpoint(request: Request,project_id: str, process_request: Pr
                          )
 
      if do_reset ==1:
+                         # Reset lets a re-run replace a project's old retrieval data.
                          _= await chunk_model.delete_chunks_by_project_id(project_id=project.id)
      
      for asset_id, file_id in project_file_ids.items():
@@ -183,6 +210,7 @@ async def process_endpoint(request: Request,project_id: str, process_request: Pr
                          "signal": ResponseSignal.PROCESSING_FAILED.value
                     }
           )
+          # Turn LangChain documents into records that retain project and asset links.
           file_chunks_records=[
                DataChunk(
                     chunk_text=chunk.page_content,
